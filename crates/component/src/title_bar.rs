@@ -13,7 +13,8 @@ use gpui::{
 use gpui_base::TestSupportExt as _;
 use smallvec::SmallVec;
 
-pub const TITLE_BAR_HEIGHT: Pixels = px(34.);
+pub const TITLE_BAR_HEIGHT: Pixels = px(56.);
+const WINDOW_CONTROL_SIZE: Pixels = px(34.);
 #[cfg(target_os = "macos")]
 const TITLE_BAR_LEFT_PADDING: Pixels = px(80.);
 #[cfg(not(target_os = "macos"))]
@@ -210,8 +211,8 @@ impl RenderOnce for ControlIcon {
             .id(self.id())
             .test_support()
             .flex()
-            .w(TITLE_BAR_HEIGHT)
-            .h_full()
+            .w(WINDOW_CONTROL_SIZE)
+            .h(WINDOW_CONTROL_SIZE)
             .flex_shrink_0()
             .justify_center()
             .content_center()
