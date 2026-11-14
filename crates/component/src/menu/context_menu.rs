@@ -183,7 +183,7 @@ impl DeferredMenu {
                 div()
                     .w(window.bounds().size.width)
                     .h(window.bounds().size.height)
-                    .on_scroll_wheel(|_, _, cx| {
+                    .on_scroll(|_, _, cx| {
                         cx.stop_propagation();
                     })
                     .child(
@@ -288,7 +288,8 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
         window: &mut Window,
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
-        let anchor = self.anchor;
+        // At the pointer, the menu opens toward the end edge.
+        let anchor = gpui_base::logical_anchor(self.anchor, gpui_base::LayoutDirection::global(cx));
 
         self.with_element_state(
             id.unwrap(),

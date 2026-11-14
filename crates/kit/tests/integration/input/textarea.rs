@@ -778,7 +778,7 @@ fn a_wheel_packet_cancels_pending_resize_reveal_before_repaint(cx: &mut TestAppC
             cx,
         );
         window.dispatch_event(
-            gpui_kit::ScrollWheelEvent {
+            gpui_kit::ScrollEvent {
                 position,
                 delta: ScrollDelta::Lines(point(1000., 0.)),
                 touch_phase: gpui_kit::TouchPhase::Moved,
@@ -1107,7 +1107,7 @@ fn page_navigation_preserves_column_and_clamps_at_document_boundaries(cx: &mut T
 }
 
 #[gpui_kit::test]
-fn empty_document_navigation_and_forward_crlf_deletion_respect_scalar_boundaries(
+fn empty_document_navigation_and_forward_crlf_deletion_respect_grapheme_boundaries(
     cx: &mut TestAppContext,
 ) {
     let (handle, _, text) = composer(cx, |state| state.rows(4));
@@ -1134,10 +1134,8 @@ fn empty_document_navigation_and_forward_crlf_deletion_respect_scalar_boundaries
         cx.write_to_clipboard(ClipboardItem::new_string("e\u{301}\r\n🦀".into()));
         window.press("secondary-v", cx);
         window.press(START, cx);
-        // Text editing moves through Unicode scalar boundaries; CRLF is
-        // deliberately one boundary. A combining mark remains its own scalar.
-        window.press("right", cx);
-        assert_eq!(text.read(cx).cursor(), 1);
+        // Text editing moves through grapheme clusters: a letter with its
+        // combining mark is one step, and so is CRLF.
         window.press("right", cx);
         assert_eq!(text.read(cx).cursor(), "e\u{301}".len());
         window.press("shift-right", cx);
@@ -1148,9 +1146,6 @@ fn empty_document_navigation_and_forward_crlf_deletion_respect_scalar_boundaries
         assert_eq!(text.read(cx).value(), "e\u{301}🦀");
         window.press("delete", cx);
         assert_eq!(text.read(cx).value(), "e\u{301}");
-        window.press("backspace", cx);
-        assert_eq!(text.read(cx).value(), "e");
-        assert_eq!(text.read(cx).cursor(), 1);
         window.press("backspace", cx);
         assert_eq!(text.read(cx).value(), "");
         assert_eq!(text.read(cx).cursor(), 0);
@@ -1652,7 +1647,7 @@ fn scroll_over(
         cx,
     );
     window.dispatch_event(
-        gpui_kit::ScrollWheelEvent {
+        gpui_kit::ScrollEvent {
             position,
             delta: ScrollDelta::Pixels(point(px(0.), px(dy))),
             touch_phase: phase,
@@ -1751,7 +1746,7 @@ fn scrolling_vertically_over_a_single_line_input_scrolls_the_page(cx: &mut TestA
         // A trackpad swipe that is mostly vertical still drifts sideways,
         // here toward the start the text already sits at.
         window.dispatch_event(
-            gpui_kit::ScrollWheelEvent {
+            gpui_kit::ScrollEvent {
                 position,
                 delta: ScrollDelta::Pixels(point(px(2.), px(-40.))),
                 touch_phase: gpui_kit::TouchPhase::Moved,

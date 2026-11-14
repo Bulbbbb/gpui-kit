@@ -279,12 +279,13 @@ Base 还提供以下选择：
 | 退出完成前继续挂载 | `Presence` | 逻辑关闭后继续采样，直到 `should_render()` 为 false 才停止渲染。退出中重新打开会从当前值反向。 |
 | 列表条目错峰 | `Stagger` | 根据索引和起点计算延迟；不持有列表及其 ID。 |
 | 展开未知高度的内容 | `MotionReveal` | 测量 child，再按调用方提供的进度裁剪可见高度；它本身不采样或推进进度。 |
+| 比元素存活更久的过渡，如虚拟列表中的行 | `TransitionState` | 由调用方持有状态；`sample(target, policy, window, cx)` 的行为与 `transition_with_status` 相同，状态为 `Delayed` 或 `Running` 时同样请求帧。 |
 
 [Base Motion 指南](../base/motion.md)列出完整签名、参数校验、示例与基准测试。这里的 `Transition` 不同于旧的 `gpui_kit::base::animation::EffectTransition`：后者包装 GPUI `with_animation`，直接应用预设的淡入、滑动、宽度和高度效果。新的目标驱动动效优先使用 `base::motion` primitive，再自行应用采样值。
 
 ## GPUI Component：语义化动效策略
 
-样式化组件通过 `cx.theme().motion_tokens()` 共享策略。`MotionTokens` 包含 `duration_instant`、`duration_fast`、`duration_normal`、`duration_slow`；`easing_enter`、`easing_exit`、`easing_move`；`spring_control`、`spring_move`；`distance_short`、`distance_medium`；以及滚动条的空闲保持与淡出时长 `scrollbar_idle`、`scrollbar_exit`。默认值构成协调的尺度，并不意味着所有控件都必须动画。从当前主题读取 token，产品才能集中调整。
+样式化组件通过 `cx.theme().motion_tokens()` 共享策略。`MotionTokens` 包含 `duration_instant`、`duration_fast`、`duration_normal`、`duration_slow`；`easing_enter`、`easing_exit`、`easing_move`；`spring_control`、`spring_move`；以及 `distance_short`、`distance_medium`。默认值构成协调的尺度，并不意味着所有控件都必须动画。从当前主题读取 token，产品才能集中调整。
 
 运行现有样式化控件：`cargo run -p gpui-component-story -- SwitchStory`。快速点击可用的开关两次：每次点击都改变 checked 状态，滑块会在运动途中改变方向。同页的禁用开关不会响应。打开 [`crates/component/src/switch.rs`](https://github.com/longbridge/gpui-kit/blob/main/crates/component/src/switch.rs)，沿着 `checked` 找到滑块的目标偏移，并沿着 `cx.theme().motion_tokens().spring_move` 找到 Base `spring` 调用。再到 [`crates/component/src/theme/motion.rs`](https://github.com/longbridge/gpui-kit/blob/main/crates/component/src/theme/motion.rs)，暂时将默认 `spring_move` 时长从 280 ms 改为 600 ms，重新运行 story：checked 状态相同，滑块收敛更慢。练习后恢复 280 ms。story 持有 checked 布尔值，组件将其映射成视觉目标，主题提供动效策略。
 
@@ -296,6 +297,6 @@ Base 还提供以下选择：
 
 GPUI 把偏好保存在 `App` 中；`cx.reduce_motion()` 读取，`cx.set_reduce_motion(...)` 可设置。`gpui_kit::init(cx)` 会初始化 Base 的系统偏好处理。Base 在初始化时读取 macOS 和 Windows 的设置；Linux 桌面 portal 的设置到达后会继续跟踪变化；其他目标不修改该标志。应用显式设置后，Base 会尊重应用的选择。若要在初始化后重新读取 macOS 或 Windows，调用 `gpui_kit::base::apply_system_reduce_motion(cx)`。
 
-GPUI 元素动画采用前述静态端点。Base 的有限 transition、spring、keyframes、presence 和 sequence 会立即到达相应目标或最终状态，并停止请求运动帧。`MotionReveal` 只消费进度：直接使用时，应在减弱动态效果下传入端点值，或由遵守该偏好的采样器驱动。子元素测量高度发生变化时，它仍可能请求一帧。无限循环的活动状态也必须有可理解的静态表示。自定义元素若自行持有时钟，应检查 `cx.reduce_motion()`，并且只在仍有必要运动时请求帧；不要在 render 中无条件调用 `cx.notify()`、`window.refresh()` 或 `window.request_animation_frame()`。
+GPUI 元素动画采用前述静态端点。Base 的有限 transition、spring、keyframes、presence 和 sequence 会立即到达相应目标或最终状态，并停止请求运动帧。以 `.reduced_motion(ReducedMotion::Continue)` 构建的值 `Transition` 则保留其时序；只应将它用于淡入淡出等非空间效果。`MotionReveal` 只消费进度：直接使用时，应在减弱动态效果下传入端点值，或由遵守该偏好的采样器驱动。子元素测量高度发生变化时，它仍可能请求一帧。无限循环的活动状态也必须有可理解的静态表示。自定义元素若自行持有时钟，应检查 `cx.reduce_motion()`，并且只在仍有必要运动时请求帧；不要在 render 中无条件调用 `cx.notify()`、`window.refresh()` 或 `window.request_animation_frame()`。
 
 动效应用于解释出现、关闭、展开和空间连续性。当透明度或 transform 已足以说明关系时，避免大范围 layout 动画。过渡过程中也要协调键盘焦点、命中区域和语义状态；绘制位置改变本身不会向辅助技术播报新状态。界面变化的语义处理见[无障碍指南](./accessibility)。
