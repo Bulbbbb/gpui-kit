@@ -55,6 +55,7 @@ pub struct TabBar {
     suffix: Option<AnyElement>,
     children: SmallVec<[Tab; 2]>,
     last_empty_space: AnyElement,
+    on_tab_bounds: Option<Rc<dyn Fn(usize, Bounds<Pixels>)>>,
     selected_index: Option<usize>,
     variant: TabVariant,
     size: Size,
@@ -78,6 +79,7 @@ impl TabBar {
             variant: TabVariant::default(),
             size: Size::default(),
             last_empty_space: div().w_3().into_any_element(),
+            on_tab_bounds: None,
             selected_index: None,
             on_click: None,
             menu: false,
@@ -85,6 +87,14 @@ impl TabBar {
         }
     }
 
+    /// Observe the full tab geometry, including its prefix and suffix.
+    pub(crate) fn on_tab_bounds(
+        mut self,
+        callback: impl Fn(usize, Bounds<Pixels>) + 'static,
+    ) -> Self {
+        self.on_tab_bounds = Some(Rc::new(callback));
+        self
+    }
     /// Set the Tab variant, all children will inherit the variant.
     pub fn with_variant(mut self, variant: TabVariant) -> Self {
         self.variant = variant;
@@ -642,6 +652,17 @@ impl RenderOnce for TabBar {
             } else {
                 tab.when(push_end, |this| this.ml_auto()).into_any_element()
             });
+        }
+        if let Some(observe) = self.on_tab_bounds {
+            for (ix, tab) in rendered_tabs.iter_mut().enumerate() {
+                let content = std::mem::replace(tab, div().into_any_element());
+                let observe = observe.clone();
+                *tab = h_flex()
+                    .flex_shrink_0()
+                    .on_prepaint(move |bounds, _, _| observe(ix, bounds))
+                    .child(content)
+                    .into_any_element();
+            }
         }
         // `ScrollHandle` indexes the strip's children in layout order, which
         // `TabReveal::item` maps back to tab indices.

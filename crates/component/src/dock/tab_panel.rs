@@ -58,6 +58,28 @@ const DOCK_TOGGLE_SELECTOR: &str = "dock-toggle";
 /// placeholder knows where to fly in from.
 const DRAG_PREVIEW_SIZE: gpui::Size<gpui::Pixels> = gpui::size(px(96.), px(30.));
 
+/// Translate a gap in the original strip to an index after removing the source.
+fn tab_insertion_index(slot: usize, source: Option<usize>) -> usize {
+    match source {
+        Some(source) if source < slot => slot - 1,
+        _ => slot,
+    }
+}
+
+#[cfg(test)]
+mod tab_insertion_tests {
+    use super::tab_insertion_index;
+
+    #[test]
+    fn moving_tabs_uses_gaps_before_removing_the_source() {
+        assert_eq!(tab_insertion_index(0, Some(0)), 0);
+        assert_eq!(tab_insertion_index(1, Some(0)), 0);
+        assert_eq!(tab_insertion_index(2, Some(0)), 1);
+        assert_eq!(tab_insertion_index(3, Some(0)), 2);
+        assert_eq!(tab_insertion_index(0, Some(2)), 0);
+        assert_eq!(tab_insertion_index(2, None), 2);
+    }
+}
 /// The preview that follows the cursor while a panel is dragged.
 ///
 /// `gpui_base::dock::DragPanel` is the payload and draws nothing; this is the
@@ -461,6 +483,10 @@ impl TabGroupSkin {
 
         let droppable = group.is_droppable();
         let tabs_count = group.panels().len();
+        let strip_bounds = Rc::new(RefCell::new(vec![
+            None::<gpui::Bounds<gpui::Pixels>>;
+            tabs_count
+        ]));
         let active_ix = group.active_ix();
         let displayed = group.active_panel().map(|panel| panel.panel_id(cx));
         let visible: Vec<usize> = group
@@ -485,7 +511,16 @@ impl TabGroupSkin {
             }
         }
 
-        TabBar::new("tab-bar")
+        let tab_bar = TabBar::new("tab-bar")
+            .on_tab_bounds({
+                let strip_bounds = strip_bounds.clone();
+                let visible = visible.clone();
+                move |index, rect| {
+                    if let Some(&panel_index) = visible.get(index) {
+                        strip_bounds.borrow_mut()[panel_index] = Some(rect);
+                    }
+                }
+            })
             .track_scroll(&self.scroll_handle)
             .when(has_leading, |this| {
                 this.prefix(
@@ -512,6 +547,7 @@ impl TabGroupSkin {
                         let handle = PanelHandle::of(panel);
                         let drag = tab_drag(group, ix, cx);
 
+                        let tab_bounds = strip_bounds.clone();
                         Tab::new()
                             .ix(ix)
                             .debug_selector(move || format!("{TAB_SELECTOR}-{ix}"))
@@ -613,36 +649,48 @@ impl TabGroupSkin {
                                     })
                                 })
                                 .when(droppable, |this| {
-                                    this.drag_over::<DragPanel>(|this, _, _, cx| {
-                                        this.rounded_s(px(0.), cx)
-                                            .border_s(px(2.), cx)
-                                            .border_e(px(0.), cx)
-                                            .border_color(cx.theme().drag_border)
-                                    })
-                                    .on_drop({
-                                        let group = group.clone();
-                                        move |drag: &DragPanel, window, cx| {
-                                            group.drop_panel(
-                                                drag.clone(),
-                                                Some(ix),
-                                                true,
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    })
-                                    .drag_over::<AnyDrag>(|this, _, _, cx| {
-                                        this.rounded_s(px(0.), cx)
-                                            .border_s(px(2.), cx)
-                                            .border_e(px(0.), cx)
-                                            .border_color(cx.theme().drag_border)
-                                    })
-                                    .on_drop({
-                                        let group = group.clone();
-                                        move |item: &AnyDrag, window, cx| {
-                                            group.drop_item(item.clone(), None, window, cx);
-                                        }
-                                    })
+                                    this.drag_over::<DragPanel>(|style, _, _, _| style)
+                                        .on_drop({
+                                            let group = group.clone();
+                                            let bounds = tab_bounds.clone();
+                                            move |drag: &DragPanel, window, cx| {
+                                                let after = window.mouse_position().x
+                                                    > bounds.borrow()[ix]
+                                                        .map(|rect| rect.center().x)
+                                                        .unwrap_or(window.mouse_position().x);
+                                                let slot = ix + usize::from(after);
+                                                let source = (drag.source() == group.node())
+                                                    .then(|| {
+                                                        group.panels().iter().position(|panel| {
+                                                            panel.panel_id(cx) == drag.panel()
+                                                        })
+                                                    })
+                                                    .flatten();
+                                                let target = tab_insertion_index(slot, source);
+                                                if source == Some(target) {
+                                                    return;
+                                                }
+                                                group.drop_panel(
+                                                    drag.clone(),
+                                                    Some(target),
+                                                    true,
+                                                    window,
+                                                    cx,
+                                                );
+                                            }
+                                        })
+                                        .drag_over::<AnyDrag>(|this, _, _, cx| {
+                                            this.rounded_s(px(0.), cx)
+                                                .border_s(px(2.), cx)
+                                                .border_e(px(0.), cx)
+                                                .border_color(cx.theme().drag_border)
+                                        })
+                                        .on_drop({
+                                            let group = group.clone();
+                                            move |item: &AnyDrag, window, cx| {
+                                                group.drop_item(item.clone(), None, window, cx);
+                                            }
+                                        })
                                 })
                             })
                     })
@@ -656,29 +704,36 @@ impl TabGroupSkin {
                     .flex_grow_1()
                     .min_w_16()
                     .when(droppable, |this| {
-                        this.drag_over::<DragPanel>(|this, _, _, cx| {
-                            this.bg(cx.theme().tokens.drop_target)
-                        })
-                        .on_drop({
-                            let group = group.clone();
-                            let node = group.node();
-                            move |drag: &DragPanel, window, cx| {
-                                // A panel dropped past its own last tab lands
-                                // in the final slot; one from elsewhere is
-                                // appended in the background.
-                                let ix = (drag.source() == node).then(|| tabs_count - 1);
-                                group.drop_panel(drag.clone(), ix, false, window, cx);
-                            }
-                        })
-                        .drag_over::<AnyDrag>(|this, _, _, cx| {
-                            this.bg(cx.theme().tokens.drop_target)
-                        })
-                        .on_drop({
-                            let group = group.clone();
-                            move |item: &AnyDrag, window, cx| {
-                                group.drop_item(item.clone(), None, window, cx);
-                            }
-                        })
+                        this.drag_over::<DragPanel>(|this, _, _, _| this)
+                            .on_drop({
+                                let group = group.clone();
+                                let node = group.node();
+                                move |drag: &DragPanel, window, cx| {
+                                    // A panel dropped past its own last tab lands
+                                    // in the final slot; one from elsewhere is
+                                    // appended in the background.
+                                    let source = (drag.source() == node)
+                                        .then(|| {
+                                            group.panels().iter().position(|panel| {
+                                                panel.panel_id(cx) == drag.panel()
+                                            })
+                                        })
+                                        .flatten();
+                                    let target = tab_insertion_index(tabs_count, source);
+                                    if source == Some(target) {
+                                        return;
+                                    }
+                                    let ix = Some(target);
+                                    group.drop_panel(drag.clone(), ix, false, window, cx);
+                                }
+                            })
+                            .drag_over::<AnyDrag>(|this, _, _, _| this)
+                            .on_drop({
+                                let group = group.clone();
+                                move |item: &AnyDrag, window, cx| {
+                                    group.drop_item(item.clone(), None, window, cx);
+                                }
+                            })
                     }),
             )
             .when(!collapsed, |this| {
@@ -704,6 +759,95 @@ impl TabGroupSkin {
                         .children(right_button),
                 )
             })
+            .into_any_element();
+
+        div()
+            .id("dock-tab-strip-overlay")
+            .when(droppable && !collapsed, |strip| {
+                strip.on_drop({
+                    let group = group.clone();
+                    let measured = strip_bounds.clone();
+                    move |drag: &DragPanel, window, cx| {
+                        let last = measured.borrow().iter().rev().flatten().next().copied();
+                        let Some(last) = last else {
+                            return;
+                        };
+                        if window.mouse_position().x < last.right() {
+                            return;
+                        }
+                        // The entire trailing strip accepts append, including
+                        // toolbar space beyond the last visible tab.
+                        let source = (drag.source() == group.node())
+                            .then(|| {
+                                group
+                                    .panels()
+                                    .iter()
+                                    .position(|panel| panel.panel_id(cx) == drag.panel())
+                            })
+                            .flatten();
+                        let target = tab_insertion_index(tabs_count, source);
+                        if source != Some(target) {
+                            group.drop_panel(drag.clone(), Some(target), true, window, cx);
+                        }
+                    }
+                })
+            })
+            .on_drag_move(|_: &gpui::DragMoveEvent<DragPanel>, window, _| window.refresh())
+            .on_drag_move(|_: &gpui::DragMoveEvent<AnyDrag>, window, _| window.refresh())
+            .relative()
+            .w_full()
+            .flex_none()
+            .child(tab_bar)
+            .child(
+                gpui::canvas(
+                    |bounds, _, _| bounds,
+                    move |_, bounds, window, cx| {
+                        if !droppable
+                            || collapsed
+                            || !cx.has_active_drag()
+                            || !bounds.contains(&window.mouse_position())
+                        {
+                            return;
+                        }
+                        let measured = strip_bounds.borrow();
+                        let tabs: Vec<_> = measured.iter().flatten().copied().collect();
+                        if tabs.is_empty() {
+                            return;
+                        }
+                        let mouse_x = window.mouse_position().x;
+                        let slot = tabs
+                            .iter()
+                            .position(|tab| mouse_x < tab.center().x)
+                            .unwrap_or(tabs.len());
+                        // Each insertion gap has one coordinate, regardless of which
+                        // neighbouring tab currently owns the pointer hitbox.
+                        let x = if slot == 0 {
+                            tabs[0].left()
+                        } else if slot == tabs.len() {
+                            tabs[slot - 1].right()
+                        } else {
+                            tabs[slot].left()
+                        };
+                        if x < bounds.left() || x > bounds.right() {
+                            return;
+                        }
+                        window.paint_quad(gpui::fill(
+                            gpui::Bounds::new(
+                                gpui::point(
+                                    if slot == tabs.len() { x - px(2.) } else { x },
+                                    tabs[0].top(),
+                                ),
+                                gpui::size(px(2.), tabs[0].size.height),
+                            ),
+                            cx.theme().drag_border,
+                        ));
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+            )
             .into_any_element()
     }
 }
