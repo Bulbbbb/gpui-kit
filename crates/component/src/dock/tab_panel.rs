@@ -19,7 +19,7 @@ use gpui::{
     prelude::FluentBuilder as _, px, rems,
 };
 use gpui_base::{
-    LogicalStyledExt as _,
+    ElementExt as _, LogicalStyledExt as _,
     dock::{
         AnyDrag, DockPlacement, DragPanel, DropIndicator, NodeId, PaneNode, PaneRef, PanelId,
         TabGroupContext, TabGroupRenderer,
@@ -57,6 +57,14 @@ const DOCK_TOGGLE_SELECTOR: &str = "dock-toggle";
 /// The size the styled drag preview occupies, reported to base so a drop
 /// placeholder knows where to fly in from.
 const DRAG_PREVIEW_SIZE: gpui::Size<gpui::Pixels> = gpui::size(px(96.), px(30.));
+
+fn pinned_tab_count(group: &TabGroupContext, cx: &App) -> usize {
+    group
+        .panels()
+        .iter()
+        .take_while(|panel| PanelHandle::of(panel).is_some_and(|handle| handle.pinned(cx)))
+        .count()
+}
 
 /// Translate a gap in the original strip to an index after removing the source.
 fn tab_insertion_index(slot: usize, source: Option<usize>) -> usize {
@@ -405,7 +413,8 @@ impl TabGroupSkin {
         let left_button = self.dock_toggle_button(DockPlacement::Left, group, cx);
         let bottom_button = self.dock_toggle_button(DockPlacement::Bottom, group, cx);
         let right_button = self.dock_toggle_button(DockPlacement::Right, group, cx);
-        let has_leading = left_button.is_some() || bottom_button.is_some();
+        let has_leading =
+            left_button.is_some() || bottom_button.is_some() || pinned_tab_count(group, cx) > 0;
         let handle = PanelHandle::of(panel);
         let title_style = handle.and_then(|handle| handle.title_style(cx));
         let drag = tab_drag(group, ix, cx);
@@ -477,12 +486,14 @@ impl TabGroupSkin {
         let left_button = self.dock_toggle_button(DockPlacement::Left, group, cx);
         let bottom_button = self.dock_toggle_button(DockPlacement::Bottom, group, cx);
         let right_button = self.dock_toggle_button(DockPlacement::Right, group, cx);
-        let has_leading = left_button.is_some() || bottom_button.is_some();
+        let has_leading =
+            left_button.is_some() || bottom_button.is_some() || pinned_tab_count(group, cx) > 0;
         let is_bottom_dock = bottom_button.is_some();
         let collapsed = group.is_collapsed();
 
         let droppable = group.is_droppable();
         let tabs_count = group.panels().len();
+        let pinned_bounds = Rc::new(Cell::new(None::<gpui::Bounds<gpui::Pixels>>));
         let strip_bounds = Rc::new(RefCell::new(vec![
             None::<gpui::Bounds<gpui::Pixels>>;
             tabs_count
@@ -493,7 +504,7 @@ impl TabGroupSkin {
             .panels()
             .iter()
             .enumerate()
-            .filter(|(_, panel)| panel.visible(cx))
+            .filter(|(ix, panel)| *ix >= pinned_tab_count(group, cx) && panel.visible(cx))
             .map(|(ix, _)| ix)
             .collect();
         let displayed_ix = displayed.and_then(|displayed| {
@@ -525,6 +536,10 @@ impl TabGroupSkin {
             .when(has_leading, |this| {
                 this.prefix(
                     h_flex()
+                        .on_prepaint({
+                            let pinned_bounds = pinned_bounds.clone();
+                            move |bounds, _, _| pinned_bounds.set(Some(bounds))
+                        })
                         .items_center()
                         .top_0()
                         // Overlap the first tab by 1px so their borders don't double up.
@@ -534,7 +549,25 @@ impl TabGroupSkin {
                         .h_full()
                         .border_color(cx.theme().border)
                         .bg(cx.theme().tokens.tab_bar)
-                        .px_2()
+                        .when(pinned_tab_count(group, cx) == 0, |this| this.px_2())
+                        .children(
+                            group
+                                .panels()
+                                .iter()
+                                .take(pinned_tab_count(group, cx))
+                                .enumerate()
+                                .map(|(ix, panel)| {
+                                    let owner = group.clone();
+                                    Tab::new()
+                                        .ix(ix)
+                                        .tab_bar_prefix(false)
+                                        .selected(!collapsed && ix == active_ix)
+                                        .child(panel_title(panel, window, cx))
+                                        .on_click(move |_, window, cx| {
+                                            owner.select_tab(ix, window, cx)
+                                        })
+                                }),
+                        )
                         .children(left_button)
                         .children(bottom_button),
                 )
@@ -666,7 +699,10 @@ impl TabGroupSkin {
                                                         })
                                                     })
                                                     .flatten();
-                                                let target = tab_insertion_index(slot, source);
+                                                let target = tab_insertion_index(
+                                                    slot.max(pinned_tab_count(&group, cx)),
+                                                    source,
+                                                );
                                                 if source == Some(target) {
                                                     return;
                                                 }
@@ -767,8 +803,16 @@ impl TabGroupSkin {
                 strip.on_drop({
                     let group = group.clone();
                     let measured = strip_bounds.clone();
+                    let pinned_bounds = pinned_bounds.clone();
                     move |drag: &DragPanel, window, cx| {
-                        let last = measured.borrow().iter().rev().flatten().next().copied();
+                        let last = measured
+                            .borrow()
+                            .iter()
+                            .rev()
+                            .flatten()
+                            .next()
+                            .copied()
+                            .or_else(|| pinned_bounds.get());
                         let Some(last) = last else {
                             return;
                         };
@@ -812,6 +856,17 @@ impl TabGroupSkin {
                         let measured = strip_bounds.borrow();
                         let tabs: Vec<_> = measured.iter().flatten().copied().collect();
                         if tabs.is_empty() {
+                            if let Some(pinned) = pinned_bounds.get() {
+                                if window.mouse_position().x >= pinned.right() {
+                                    window.paint_quad(gpui::fill(
+                                        gpui::Bounds::new(
+                                            gpui::point(pinned.right(), bounds.top()),
+                                            gpui::size(px(2.), bounds.size.height),
+                                        ),
+                                        cx.theme().drag_border,
+                                    ));
+                                }
+                            }
                             return;
                         }
                         let mouse_x = window.mouse_position().x;

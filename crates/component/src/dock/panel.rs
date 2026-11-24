@@ -69,6 +69,11 @@ impl PanelControl {
 /// plus this one gets an unnamed title and no chrome.
 #[allow(unused_variables)]
 pub trait Panel: gpui_base::dock::Panel {
+    /// Keep this panel in the leading non-draggable strip.
+    fn pinned(&self, _cx: &App) -> bool {
+        false
+    }
+
     /// The short name shown when a tab bar has no room for the full title.
     ///
     /// Used by an already-collapsed tab group, where only the strip of tabs is
@@ -151,6 +156,9 @@ pub trait Panel: gpui_base::dock::Panel {
 /// Object-safe counterpart of [`Panel`], and the presentation half of the
 /// handle a skin holds.
 pub trait PanelView: gpui_base::dock::PanelView {
+    fn pinned(&self, _cx: &App) -> bool {
+        false
+    }
     fn tab_name(&self, cx: &App) -> Option<SharedString>;
     fn title(&self, window: &mut Window, cx: &mut App) -> AnyElement;
     fn title_style(&self, cx: &App) -> Option<TitleStyle>;
@@ -163,6 +171,9 @@ pub trait PanelView: gpui_base::dock::PanelView {
 }
 
 impl<T: Panel> PanelView for Entity<T> {
+    fn pinned(&self, cx: &App) -> bool {
+        self.read(cx).pinned(cx)
+    }
     fn tab_name(&self, cx: &App) -> Option<SharedString> {
         self.read(cx).tab_name(cx)
     }
