@@ -1,4 +1,5 @@
 [package]
+workspace = "../.."
 description = "Behavior, interaction, and infrastructure foundations for GPUI applications."
 keywords = ["desktop", "gpui", "ui", "foundation"]
 license = "Apache-2.0"
