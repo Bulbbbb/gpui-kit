@@ -36,6 +36,7 @@ pub struct ResizableState {
     panels: Vec<ResizablePanelState>,
     sizes: Vec<Pixels>,
     resizing_panel_ix: Option<usize>,
+    adjacent_only: bool,
     bounds: Bounds<Pixels>,
 }
 
@@ -46,12 +47,19 @@ impl Default for ResizableState {
             panels: vec![],
             sizes: vec![],
             resizing_panel_ix: None,
+            adjacent_only: false,
             bounds: Bounds::default(),
         }
     }
 }
 
 impl ResizableState {
+    /// Restrict handle drags to the two bordering panels.
+    pub fn adjacent_only(mut self, enabled: bool) -> Self {
+        self.adjacent_only = enabled;
+        self
+    }
+
     /// Get the size of the panels.
     pub fn sizes(&self) -> &Vec<Pixels> {
         &self.sizes
@@ -360,9 +368,23 @@ impl ResizableState {
             .collect();
         let delta = size - sizes[ix];
         if delta > px(0.) {
-            self.transfer_size(&mut sizes, ix, next..self.panels.len(), delta);
+            self.transfer_size(
+                &mut sizes,
+                ix,
+                next..if self.adjacent_only {
+                    next + 1
+                } else {
+                    self.panels.len()
+                },
+                delta,
+            );
         } else if delta < px(0.) {
-            self.transfer_size(&mut sizes, next, (0..=ix).rev(), -delta);
+            self.transfer_size(
+                &mut sizes,
+                next,
+                (if self.adjacent_only { ix } else { 0 }..=ix).rev(),
+                -delta,
+            );
         }
 
         if sizes != self.sizes {
